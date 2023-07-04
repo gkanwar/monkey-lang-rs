@@ -285,10 +285,12 @@ mod tests {
   fn big_prog() {
     let res = lex(r#"
       let a = 2*3/4+-6;a+1;
-      fn asdf(10) {}[]();
+      fn asdf(10) {}[]() return;
       "hello world fn return let";
       // some comment if else
-      if else != == !a !1 1a a1
+      if else != == !a !1 1a a1;
+      , < <= < = > >= > =;
+      : true false;
     "#.chars().collect());
     assert!(res.is_ok());
     let res = res.unwrap();
@@ -299,9 +301,12 @@ mod tests {
       Identifier(0), Plus, LiteralInt(1), Semicolon,
       Fn, Identifier(1), ParenOpen, LiteralInt(10), ParenClose,
       CurlyOpen, CurlyClose, SquareOpen, SquareClose, ParenOpen, ParenClose,
-      Semicolon, LiteralString(0), Semicolon,
+      Return, Semicolon, LiteralString(0), Semicolon,
       If, Else, CmpNotEquals, CmpEquals, Not, Identifier(0),
-      Not, LiteralInt(1), LiteralInt(1), Identifier(0), Identifier(2)
+      Not, LiteralInt(1), LiteralInt(1), Identifier(0), Identifier(2),
+      Semicolon, Comma, CmpLess, CmpLessEquals, CmpLess, Equals,
+      CmpGreater, CmpGreaterEquals, CmpGreater, Equals, Semicolon,
+      Colon, LiteralBool(true), LiteralBool(false), Semicolon
       ]);
     assert_eq!(res.idents, vec!["a", "asdf", "a1"]);
     assert_eq!(res.strings, vec!["hello world fn return let"]);
