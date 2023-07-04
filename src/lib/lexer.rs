@@ -51,7 +51,7 @@ pub enum LexerError {
 fn consume_whitespace(chars: &Vec<char>, i: &mut usize)
   -> Result<(), LexerError>
 {
-  while chars[*i].is_ascii_whitespace() && *i < chars.len() {
+  while *i < chars.len() && chars[*i].is_ascii_whitespace() {
     *i += 1;
   }
   Ok(())
@@ -139,16 +139,16 @@ fn consume_string_literal(chars: &Vec<char>, i: &mut usize, strings: &mut Vec<St
 fn consume_next_token(
     chars: &Vec<char>, i: &mut usize, idents: &mut Vec<String>,
     strings: &mut Vec<String>)
-  -> Result<Token, LexerError>
+  -> Result<Option<Token>, LexerError>
 {
   let peek = chars[*i];
-  return match peek {
+  Ok(Some(match peek {
     '0'..='9' => {
-      consume_int_literal(chars, i)
+      consume_int_literal(chars, i)?
     },
     c @ ( ';' | ':' | '+' | '-' | '*' | ',' | '(' | ')' | '[' | ']' | '{' | '}' ) => {
       *i += 1;
-      Ok(match c {
+      match c {
         ';' => Token::Semicolon,
         ':' => Token::Colon,
         '+' => Token::Plus,
@@ -162,63 +162,63 @@ fn consume_next_token(
         '{' => Token::CurlyOpen,
         '}' => Token::CurlyClose,
         _ => unimplemented!(),
-      })
+      }
     },
     '/' => {
       if *i+1 < chars.len() && chars[*i+1] == '/' {
         consume_line_comment(chars, i);
-        todo!();
+        return Ok(None);
       }
       else {
         *i += 1;
-        Ok(Token::Divide)
+        Token::Divide
       }
     },
     '=' => {
       if *i+1 < chars.len() && chars[*i+1] == '=' {
         *i += 2;
-        Ok(Token::CmpEquals)
+        Token::CmpEquals
       }
       else {
         *i += 1;
-        Ok(Token::Equals)
+        Token::Equals
       }
     },
     '!' => {
       if *i+1 < chars.len() && chars[*i+1] == '=' {
         *i += 2;
-        Ok(Token::CmpNotEquals)
+        Token::CmpNotEquals
       }
       else {
         *i += 1;
-        Ok(Token::Not)
+        Token::Not
       }
     },
     '<' => {
       if *i+1 < chars.len() && chars[*i+1] == '=' {
         *i += 2;
-        Ok(Token::CmpLessEquals)
+        Token::CmpLessEquals
       }
       else {
         *i += 1;
-        Ok(Token::CmpLess)
+        Token::CmpLess
       }
     },
     '>' => {
       if *i+1 < chars.len() && chars[*i+1] == '=' {
         *i += 2;
-        Ok(Token::CmpGreaterEquals)
+        Token::CmpGreaterEquals
       }
       else {
         *i += 1;
-        Ok(Token::CmpGreater)
+        Token::CmpGreater
       }
     },
     '"' | '\'' => {
-      consume_string_literal(chars, i, strings)
+      consume_string_literal(chars, i, strings)?
     },
     c if c.is_ascii_alphabetic() => {
-      consume_identifier_or_keyword(chars, i, idents)
+      consume_identifier_or_keyword(chars, i, idents)?
     },
     c if !c.is_ascii() => {
       return Err(LexerError::Generic(std::format!(
@@ -228,7 +228,7 @@ fn consume_next_token(
       return Err(LexerError::Generic(std::format!(
           "invalid character {}", peek)));
     }
-  }
+  }))
 }
 
 pub fn lex(chars: Vec<char>) -> Result<Program, LexerError> {
@@ -239,8 +239,13 @@ pub fn lex(chars: Vec<char>) -> Result<Program, LexerError> {
   while i < chars.len() {
     consume_whitespace(&chars, &mut i)?;
     if i == chars.len() { break; }
-    let tok = consume_next_token(&chars, &mut i, &mut idents, &mut strings)?;
-    tokens.push(tok);
+    let res = consume_next_token(&chars, &mut i, &mut idents, &mut strings)?;
+    match res {
+      Some(tok) => {
+        tokens.push(tok);
+      }
+      None => {}
+    }
   }
   Ok(Program { tokens, idents, strings })
 }
@@ -249,9 +254,10 @@ pub fn lex(chars: Vec<char>) -> Result<Program, LexerError> {
 mod tests {
   use super::*;
   use Token::*;
+
   #[test]
   fn basic_arith() {
-    let res = lex("1+2/3*4".chars().collect());
+    let res = lex(r#"1+2/3*4"#.chars().collect());
     assert!(res.is_ok());
     let res = res.unwrap();
     assert_eq!(
@@ -261,17 +267,43 @@ mod tests {
     assert_eq!(res.idents.len(), 0);
     assert_eq!(res.strings.len(), 0);
   }
+
   #[test]
   fn let_assign() {
-    let res = lex("let a = 1 + 2;".chars().collect());
+    let res = lex(r#"let a = 1 + 2;"#.chars().collect());
     assert!(res.is_ok());
     let res = res.unwrap();
     assert_eq!(
       res.tokens, vec![
       Let, Identifier(0), Equals, LiteralInt(1), Plus, LiteralInt(2), Semicolon
     ]);
-    assert_eq!(res.idents.len(), 1);
-    assert_eq!(res.idents[0], "a");
+    assert_eq!(res.idents, vec!["a"]);
     assert_eq!(res.strings.len(), 0);
+  }
+
+  #[test]
+  fn big_prog() {
+    let res = lex(r#"
+      let a = 2*3/4+-6;a+1;
+      fn asdf(10) {}[]();
+      "hello world fn return let";
+      // some comment if else
+      if else != == !a !1 1a a1
+    "#.chars().collect());
+    assert!(res.is_ok());
+    let res = res.unwrap();
+    assert_eq!(
+      res.tokens, vec![
+      Let, Identifier(0), Equals, LiteralInt(2), Times, LiteralInt(3),
+      Divide, LiteralInt(4), Plus, Minus, LiteralInt(6), Semicolon,
+      Identifier(0), Plus, LiteralInt(1), Semicolon,
+      Fn, Identifier(1), ParenOpen, LiteralInt(10), ParenClose,
+      CurlyOpen, CurlyClose, SquareOpen, SquareClose, ParenOpen, ParenClose,
+      Semicolon, LiteralString(0), Semicolon,
+      If, Else, CmpNotEquals, CmpEquals, Not, Identifier(0),
+      Not, LiteralInt(1), LiteralInt(1), Identifier(0), Identifier(2)
+      ]);
+    assert_eq!(res.idents, vec!["a", "asdf", "a1"]);
+    assert_eq!(res.strings, vec!["hello world fn return let"]);
   }
 }
