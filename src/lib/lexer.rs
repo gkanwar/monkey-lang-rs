@@ -3,7 +3,7 @@ pub type IdentIdx = usize;
 // Index into strings table
 pub type StringIdx = usize;
 
-#[derive(Debug,Eq,PartialEq)]
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub enum Token {
   Let,
   Fn,
@@ -259,26 +259,26 @@ mod tests {
   fn basic_arith() {
     let res = lex(r#"1+2/3*4"#.chars().collect());
     assert!(res.is_ok());
-    let res = res.unwrap();
+    let prog = res.unwrap();
     assert_eq!(
-      res.tokens, vec![
+      prog.tokens, vec![
       LiteralInt(1), Plus, LiteralInt(2), Divide, LiteralInt(3), Times, LiteralInt(4)
     ]);
-    assert_eq!(res.idents.len(), 0);
-    assert_eq!(res.strings.len(), 0);
+    assert_eq!(prog.idents.len(), 0);
+    assert_eq!(prog.strings.len(), 0);
   }
 
   #[test]
   fn let_assign() {
     let res = lex(r#"let a = 1 + 2;"#.chars().collect());
     assert!(res.is_ok());
-    let res = res.unwrap();
+    let prog = res.unwrap();
     assert_eq!(
-      res.tokens, vec![
+      prog.tokens, vec![
       Let, Identifier(0), Equals, LiteralInt(1), Plus, LiteralInt(2), Semicolon
     ]);
-    assert_eq!(res.idents, vec!["a"]);
-    assert_eq!(res.strings.len(), 0);
+    assert_eq!(prog.idents, vec!["a"]);
+    assert_eq!(prog.strings.len(), 0);
   }
 
   #[test]
@@ -293,9 +293,9 @@ mod tests {
       : true false;
     "#.chars().collect());
     assert!(res.is_ok());
-    let res = res.unwrap();
+    let prog = res.unwrap();
     assert_eq!(
-      res.tokens, vec![
+      prog.tokens, vec![
       Let, Identifier(0), Equals, LiteralInt(2), Times, LiteralInt(3),
       Divide, LiteralInt(4), Plus, Minus, LiteralInt(6), Semicolon,
       Identifier(0), Plus, LiteralInt(1), Semicolon,
@@ -308,7 +308,7 @@ mod tests {
       CmpGreater, CmpGreaterEquals, CmpGreater, Equals, Semicolon,
       Colon, LiteralBool(true), LiteralBool(false), Semicolon
       ]);
-    assert_eq!(res.idents, vec!["a", "asdf", "a1"]);
-    assert_eq!(res.strings, vec!["hello world fn return let"]);
+    assert_eq!(prog.idents, vec!["a", "asdf", "a1"]);
+    assert_eq!(prog.strings, vec!["hello world fn return let"]);
   }
 }
