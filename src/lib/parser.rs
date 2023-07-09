@@ -329,30 +329,158 @@ mod tests {
   use super::UnaryOp::*;
   use super::*;
   use crate::lexer::lex;
+
+  trait StandardFmt {
+    fn standard_format(&self, idents: &Vec<String>, strings: &Vec<String>) -> String;
+  }
+  fn standard_format_binop(bin_op: &super::BinaryOp) -> String {
+    match bin_op {
+      CmpEquals => "==",
+      CmpNotEquals => "!=",
+      CmpLess => "<",
+      CmpLessEquals => "<=",
+      CmpGreater => ">",
+      CmpGreaterEquals => ">=",
+      Plus => "+",
+      Minus => "-",
+      Times => "*",
+      Divide => "/",
+    }
+    .into()
+  }
+  fn standard_format_unop(un_op: &super::UnaryOp) -> String {
+    match un_op {
+      Not => "!",
+      UPlus => "+",
+      UMinus => "-",
+    }
+    .into()
+  }
+  fn standard_format_stmts(
+    stmts: &Vec<Statement>,
+    idents: &Vec<String>,
+    strings: &Vec<String>,
+  ) -> String {
+    stmts
+      .iter()
+      .map(|stmt| stmt.standard_format(idents, strings))
+      .collect()
+  }
+
+  impl StandardFmt for Expr {
+    fn standard_format(&self, idents: &Vec<String>, strings: &Vec<String>) -> String {
+      match self {
+        BinaryOp(bin_op, expr1, expr2) => {
+          std::format!(
+            "({} {} {})",
+            &standard_format_binop(bin_op),
+            &expr1.standard_format(idents, strings),
+            &expr2.standard_format(idents, strings)
+          )
+        }
+        UnaryOp(un_op, expr) => {
+          std::format!(
+            "({} {})",
+            &standard_format_unop(un_op),
+            &expr.standard_format(idents, strings)
+          )
+        }
+        Atom(atomic) => match atomic {
+          Var(i) => idents[*i].clone(),
+          LiteralString(i) => std::format!("\"{}\"", strings[*i]),
+          LiteralInt(n) => std::format!("{}", n),
+          LiteralBool(b) => std::format!("{}", b),
+        },
+      }
+    }
+  }
+  impl StandardFmt for Statement {
+    fn standard_format(&self, idents: &Vec<String>, strings: &Vec<String>) -> String {
+      use Statement::*;
+      match self {
+        Assign { left, right } => {
+          std::format!(
+            "let {} = {};\n",
+            idents[*left],
+            &right.standard_format(idents, strings)
+          )
+        }
+        IfElse { pred, yes, no } => {
+          let mut out = std::format!(
+            "if ({}) {{\n{}}}\n",
+            &pred.standard_format(idents, strings),
+            standard_format_stmts(&yes, idents, strings));
+          if let Some(no) = no {
+            out.push_str(&std::format!(
+              "else {{\n{}}}\n",
+              standard_format_stmts(&no, idents, strings)));
+          }
+          out
+        }
+        FnDefn { args, body } => {
+          let mut out = String::from("fn(");
+          args.iter().map(|&i| {
+            if i != 0 {
+              out.push_str(", ");
+            }
+            out.push_str(&idents[i]);
+          });
+          out.push_str(") {\n");
+          out.push_str(&standard_format_stmts(&body, idents, strings));
+          out.push_str("}\n");
+          out
+        }
+        Return(expr) => {
+          std::format!("return {};\n", &expr.standard_format(idents, strings))
+        }
+        Block(stmts) => {
+          let mut out = String::from("{\n");
+          out.push_str(&standard_format_stmts(&stmts, idents, strings));
+          out.push_str("}\n");
+          out
+        }
+        Bare(expr) => {
+          std::format!("{};\n", expr.standard_format(idents, strings))
+        }
+      }
+    }
+  }
+
   #[test]
-  fn let_stmt() {
+  fn arith_stmt() {
     let res = lex(r#"1+2/3*4;"#.chars().collect());
     let res = parse(res.unwrap());
-    if let Err(e) = &res {
-      println!("e = {:?}", e);
-    }
-    assert!(res.is_ok());
     let prog = res.unwrap();
+    let prog_fmt = standard_format_stmts(
+      &prog.statements, &prog.idents, &prog.strings);
     assert_eq!(
-      prog.statements,
-      vec![Statement::Bare(BinaryOp(
-        Plus,
-        Box::new(Atom(LiteralInt(1))),
-        Box::new(BinaryOp(
-          Times,
-          Box::new(BinaryOp(
-            Divide,
-            Box::new(Atom(LiteralInt(2))),
-            Box::new(Atom(LiteralInt(3)))
-          )),
-          Box::new(Atom(LiteralInt(4)))
-        ))
-      ))]
-    );
+      prog_fmt, "(+ 1 (* (/ 2 3) 4));\n");
+  }
+
+  #[test]
+  fn let_stmt() {
+    let res = lex("let a = 1; let b = 2; let c = a+b;".chars().collect());
+    let res = parse(res.unwrap());
+    let prog = res.unwrap();
+    let prog_fmt = standard_format_stmts(
+      &prog.statements, &prog.idents, &prog.strings);
+    assert_eq!(
+      prog_fmt, "let a = 1;\nlet b = 2;\nlet c = (+ a b);\n");
+  }
+
+  #[test]
+  fn fn_defn_call() {
+    let res = lex(r#"
+      let add = fn(a,b) {
+        return a + b;
+      };
+      add(1,2);
+    "#.chars().collect());
+    let res = parse(res.unwrap());
+    let prog = res.unwrap();
+    let prog_fmt = standard_format_stmts(
+      &prog.statements, &prog.idents, &prog.strings);
+    assert_eq!(
+      prog_fmt, "let add = fn(a, b) {\nreturn (+ a b);\n};\nadd(1, 2);");
   }
 }
