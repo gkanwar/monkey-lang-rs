@@ -272,7 +272,11 @@ fn consume_statement(tokens: &Vec<Token>, i: &mut usize) -> Result<Option<Statem
   };
   use Token::*;
   let stmt: Statement = match peek {
-    Let => consume_let(tokens, i)?,
+    Let => {
+      let stmt = consume_let(tokens, i)?;
+      expect_tok!(tokens, i, Token::Semicolon, ";")?;
+      stmt
+    },
     Fn | ParenOpen | ParenClose | SquareOpen | SquareClose | Not | Minus | Identifier(_) | Plus
     | Minus | Times | Divide | Not | CmpEquals | CmpNotEquals | CmpLess | CmpLessEquals
     | CmpGreater | CmpGreaterEquals | Comma | Colon | LiteralString(_) | LiteralInt(_)
