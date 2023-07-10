@@ -15,6 +15,7 @@ pub enum CmpType {
 pub enum Expr {
   BinaryOp(BinaryOp, Box<Expr>, Box<Expr>),
   UnaryOp(UnaryOp, Box<Expr>),
+  WrapOp(WrapOp, Box<Expr>, Vec<Expr>),
   Atom(Atomic),
 }
 #[derive(Debug, Eq, PartialEq)]
@@ -37,11 +38,19 @@ pub enum UnaryOp {
   UMinus,
 }
 #[derive(Debug, Eq, PartialEq)]
+pub enum WrapOp {
+  FnCall,
+}
+#[derive(Debug, Eq, PartialEq)]
 pub enum Atomic {
   Var(IdentIdx),
   LiteralString(StringIdx),
   LiteralInt(i64),
   LiteralBool(bool),
+  Func {
+    args: Vec<Expr>,
+    body: Vec<Statement>,
+  },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -54,10 +63,6 @@ pub enum Statement {
     pred: Expr,
     yes: Vec<Statement>,
     no: Option<Vec<Statement>>,
-  },
-  FnDefn {
-    args: Vec<IdentIdx>,
-    body: Vec<Statement>,
   },
   Return(Expr),
   Block(Vec<Statement>),
@@ -120,9 +125,33 @@ fn prefix_binding_power(op: &UnaryOp) -> f64 {
   }
 }
 
+fn consume_args(tokens: &Vec<Token>, i: &mut usize) -> Result<Vec<Expr>, ParseError> {
+  let mut args: Vec<Expr> = vec![];
+  while *i < tokens.len() {
+    args.push(consume_expr(tokens, i)?);
+    if tokens.len() <= *i {
+      return Err(ParseError::EarlyEof("expected fn args".into()));
+    }
+    match tokens[*i] {
+      Token::Comma => {
+        *i += 1;
+      }
+      Token::ParenClose => {
+        break;
+      }
+      _ => {
+        return Err(ParseError::UnexpectedToken {
+          got: tokens[*i],
+          expected: "continuation of args or close paren".into(),
+        });
+      }
+    };
+  }
+  Ok(args)
+}
+
 // https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
 fn consume_expr_bp(tokens: &Vec<Token>, i: &mut usize, bp: f64) -> Result<Expr, ParseError> {
-  println!("consume_expr_bp {} {:?}", *i, tokens[*i]);
   if tokens.len() <= *i {
     return Err(ParseError::UntermExpr("expected an expression".into()));
   }
@@ -159,10 +188,21 @@ fn consume_expr_bp(tokens: &Vec<Token>, i: &mut usize, bp: f64) -> Result<Expr, 
       let r_bp = prefix_binding_power(&op);
       Expr::UnaryOp(op, Box::new(consume_expr_bp(tokens, i, r_bp)?))
     }
-    _ => todo!(),
+    Token::Fn => {
+      expect_tok!(tokens, i, Token::Fn, "fn")?;
+      expect_tok!(tokens, i, Token::ParenOpen, "(")?;
+      let args = consume_args(tokens, i)?;
+      expect_tok!(tokens, i, Token::ParenClose, ")")?;
+      expect_tok!(tokens, i, Token::CurlyOpen, "{")?;
+      let body = consume_multi_statement(tokens, i)?;
+      expect_tok!(tokens, i, Token::CurlyClose, "}")?;
+      Expr::Atom(Atomic::Func { args, body })
+    }
+    _ => {
+      return Err(ParseError::General("unexpected token in expression".into()));
+    }
   };
   while *i < tokens.len() {
-    println!("checking binop");
     let op = tokens[*i];
     let maybe_bin_op = match op {
       Token::CmpEquals => Some(BinaryOp::CmpEquals),
@@ -175,20 +215,35 @@ fn consume_expr_bp(tokens: &Vec<Token>, i: &mut usize, bp: f64) -> Result<Expr, 
       Token::Minus => Some(BinaryOp::Minus),
       Token::Times => Some(BinaryOp::Times),
       Token::Divide => Some(BinaryOp::Divide),
-      _ => {
-        break;
-      } // TODO: wrapping ops like parens
+      _ => None
     };
-    let bin_op = maybe_bin_op.unwrap();
-    let (l_bp, r_bp) = infix_binding_power(&bin_op);
-    if l_bp < bp {
-      break;
+    if let Some(bin_op) = maybe_bin_op {
+      let (l_bp, r_bp) = infix_binding_power(&bin_op);
+      if l_bp < bp {
+        break;
+      }
+      *i += 1;
+      let rhs = consume_expr_bp(tokens, i, r_bp)?;
+      lhs = Expr::BinaryOp(bin_op, Box::new(lhs), Box::new(rhs));
+      continue;
     }
-    *i += 1;
-    let rhs = consume_expr_bp(tokens, i, r_bp)?;
-    lhs = Expr::BinaryOp(bin_op, Box::new(lhs), Box::new(rhs));
+    let maybe_wrap_op = match op {
+      Token::ParenOpen => Some((WrapOp::FnCall, Token::ParenClose)),
+      _ => None
+    };
+    if let Some((wrap_op, close_tok)) = maybe_wrap_op {
+      *i += 1;
+      let args = consume_args(tokens, i)?;
+      if tokens.len() <= *i || tokens[*i] != close_tok {
+        return Err(ParseError::UnexpectedToken {
+          got: tokens[*i], expected: "closing token".into() });
+      }
+      *i += 1;
+      lhs = Expr::WrapOp(wrap_op, Box::new(lhs), args);
+      continue;
+    }
+    break;
   }
-  println!("Final expr: {:?}", lhs);
   Ok(lhs)
 }
 
@@ -237,7 +292,6 @@ fn consume_multi_statement(
       }
       _ => {}
     };
-    println!("Consume block statement {} of {}", *i, tokens.len());
     let maybe_stmt = consume_statement(tokens, i)?;
     match maybe_stmt {
       Some(stmt) => stmts.push(stmt),
@@ -276,9 +330,9 @@ fn consume_statement(tokens: &Vec<Token>, i: &mut usize) -> Result<Option<Statem
       let stmt = consume_let(tokens, i)?;
       expect_tok!(tokens, i, Token::Semicolon, ";")?;
       stmt
-    },
+    }
     Fn | ParenOpen | ParenClose | SquareOpen | SquareClose | Not | Minus | Identifier(_) | Plus
-    | Minus | Times | Divide | Not | CmpEquals | CmpNotEquals | CmpLess | CmpLessEquals
+    | Times | Divide | CmpEquals | CmpNotEquals | CmpLess | CmpLessEquals
     | CmpGreater | CmpGreaterEquals | Comma | Colon | LiteralString(_) | LiteralInt(_)
     | LiteralBool(_) => {
       let stmt = Statement::Bare(consume_expr(tokens, i)?);
@@ -294,6 +348,7 @@ fn consume_statement(tokens: &Vec<Token>, i: &mut usize) -> Result<Option<Statem
       Statement::Return(consume_expr(tokens, i)?)
     }
     Semicolon => {
+      *i += 1;
       return Ok(None);
     }
     Equals => {
@@ -327,12 +382,14 @@ mod tests {
   use super::BinaryOp::*;
   use super::Expr::*;
   use super::UnaryOp::*;
+  use super::WrapOp::*;
   use super::*;
   use crate::lexer::lex;
 
   trait StandardFmt {
     fn standard_format(&self, idents: &Vec<String>, strings: &Vec<String>) -> String;
   }
+
   fn standard_format_binop(bin_op: &super::BinaryOp) -> String {
     match bin_op {
       CmpEquals => "==",
@@ -348,6 +405,7 @@ mod tests {
     }
     .into()
   }
+
   fn standard_format_unop(un_op: &super::UnaryOp) -> String {
     match un_op {
       Not => "!",
@@ -355,6 +413,12 @@ mod tests {
       UMinus => "-",
     }
     .into()
+  }
+
+  fn standard_format_wrapop(wrap_op: &super::WrapOp) -> (String, String) {
+    match wrap_op {
+      FnCall => ("(".into(), ")".into())
+    }
   }
   fn standard_format_stmts(
     stmts: &Vec<Statement>,
@@ -367,29 +431,53 @@ mod tests {
       .collect()
   }
 
+  fn standard_format_args(args: &Vec<Expr>, idents: &Vec<String>, strings: &Vec<String>) -> String {
+    let mut out = String::new();
+    for i in 0..args.len() {
+      if i != 0 {
+        out.push_str(", ");
+      }
+      out.push_str(&args[i].standard_format(idents, strings));
+    }
+    out
+  }
+
   impl StandardFmt for Expr {
     fn standard_format(&self, idents: &Vec<String>, strings: &Vec<String>) -> String {
       match self {
         BinaryOp(bin_op, expr1, expr2) => {
           std::format!(
             "({} {} {})",
-            &standard_format_binop(bin_op),
-            &expr1.standard_format(idents, strings),
-            &expr2.standard_format(idents, strings)
+            standard_format_binop(bin_op),
+            expr1.standard_format(idents, strings),
+            expr2.standard_format(idents, strings)
           )
         }
         UnaryOp(un_op, expr) => {
           std::format!(
             "({} {})",
-            &standard_format_unop(un_op),
-            &expr.standard_format(idents, strings)
+            standard_format_unop(un_op),
+            expr.standard_format(idents, strings)
           )
+        }
+        WrapOp(wrap_op, outer, args) => {
+          std::format!(
+            "{}{}{}{}",
+            outer.standard_format(idents, strings),
+            standard_format_wrapop(wrap_op).0,
+            standard_format_args(args, idents, strings),
+            standard_format_wrapop(wrap_op).1)
         }
         Atom(atomic) => match atomic {
           Var(i) => idents[*i].clone(),
           LiteralString(i) => std::format!("\"{}\"", strings[*i]),
           LiteralInt(n) => std::format!("{}", n),
           LiteralBool(b) => std::format!("{}", b),
+          Func { args, body } => std::format!(
+            "fn({}) {{\n{}}}",
+            standard_format_args(args, idents, strings),
+            standard_format_stmts(body, idents, strings)
+          ),
         },
       }
     }
@@ -409,25 +497,14 @@ mod tests {
           let mut out = std::format!(
             "if ({}) {{\n{}}}\n",
             &pred.standard_format(idents, strings),
-            standard_format_stmts(&yes, idents, strings));
+            standard_format_stmts(&yes, idents, strings)
+          );
           if let Some(no) = no {
             out.push_str(&std::format!(
               "else {{\n{}}}\n",
-              standard_format_stmts(&no, idents, strings)));
+              standard_format_stmts(&no, idents, strings)
+            ));
           }
-          out
-        }
-        FnDefn { args, body } => {
-          let mut out = String::from("fn(");
-          args.iter().map(|&i| {
-            if i != 0 {
-              out.push_str(", ");
-            }
-            out.push_str(&idents[i]);
-          });
-          out.push_str(") {\n");
-          out.push_str(&standard_format_stmts(&body, idents, strings));
-          out.push_str("}\n");
           out
         }
         Return(expr) => {
@@ -451,10 +528,8 @@ mod tests {
     let res = lex(r#"1+2/3*4;"#.chars().collect());
     let res = parse(res.unwrap());
     let prog = res.unwrap();
-    let prog_fmt = standard_format_stmts(
-      &prog.statements, &prog.idents, &prog.strings);
-    assert_eq!(
-      prog_fmt, "(+ 1 (* (/ 2 3) 4));\n");
+    let prog_fmt = standard_format_stmts(&prog.statements, &prog.idents, &prog.strings);
+    assert_eq!(prog_fmt, "(+ 1 (* (/ 2 3) 4));\n");
   }
 
   #[test]
@@ -462,25 +537,28 @@ mod tests {
     let res = lex("let a = 1; let b = 2; let c = a+b;".chars().collect());
     let res = parse(res.unwrap());
     let prog = res.unwrap();
-    let prog_fmt = standard_format_stmts(
-      &prog.statements, &prog.idents, &prog.strings);
-    assert_eq!(
-      prog_fmt, "let a = 1;\nlet b = 2;\nlet c = (+ a b);\n");
+    let prog_fmt = standard_format_stmts(&prog.statements, &prog.idents, &prog.strings);
+    assert_eq!(prog_fmt, "let a = 1;\nlet b = 2;\nlet c = (+ a b);\n");
   }
 
   #[test]
   fn fn_defn_call() {
-    let res = lex(r#"
+    let res = lex(
+      r#"
       let add = fn(a,b) {
         return a + b;
       };
       add(1,2);
-    "#.chars().collect());
+    "#
+      .chars()
+      .collect(),
+    );
     let res = parse(res.unwrap());
     let prog = res.unwrap();
-    let prog_fmt = standard_format_stmts(
-      &prog.statements, &prog.idents, &prog.strings);
+    let prog_fmt = standard_format_stmts(&prog.statements, &prog.idents, &prog.strings);
     assert_eq!(
-      prog_fmt, "let add = fn(a, b) {\nreturn (+ a b);\n};\nadd(1, 2);");
+      prog_fmt,
+      "let add = fn(a, b) {\nreturn (+ a b);\n};\nadd(1, 2);\n"
+    );
   }
 }
