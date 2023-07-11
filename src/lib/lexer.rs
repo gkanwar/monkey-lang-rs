@@ -25,7 +25,9 @@ pub enum Token {
   Minus,
   Times,
   Divide,
-  Not,
+  LogicalNot,
+  LogicalAnd,
+  LogicalOr,
   Semicolon,
   LiteralString(StringIdx),
   LiteralInt(i64),
@@ -187,7 +189,7 @@ fn consume_next_token(
         Token::CmpNotEquals
       } else {
         *i += 1;
-        Token::Not
+        Token::LogicalNot
       }
     }
     '<' => {
@@ -206,6 +208,24 @@ fn consume_next_token(
       } else {
         *i += 1;
         Token::CmpGreater
+      }
+    }
+    '&' => {
+      if *i + 1 < chars.len() && chars[*i + 1] == '&' {
+        *i += 2;
+        Token::LogicalAnd
+      } else {
+        return Err(LexerError::Generic(std::format!(
+              "invalid character: {}", chars[*i])));
+      }
+    }
+    '|' => {
+      if *i + 1 < chars.len() && chars[*i + 1] == '|' {
+        *i += 2;
+        Token::LogicalOr
+      } else {
+        return Err(LexerError::Generic(std::format!(
+              "invalid character: {}", chars[*i])));
       }
     }
     '"' | '\'' => consume_string_literal(chars, i, strings)?,
@@ -352,9 +372,9 @@ mod tests {
         Else,
         CmpNotEquals,
         CmpEquals,
-        Not,
+        LogicalNot,
         Identifier(0),
-        Not,
+        LogicalNot,
         LiteralInt(1),
         LiteralInt(1),
         Identifier(0),
@@ -378,5 +398,42 @@ mod tests {
     );
     assert_eq!(prog.idents, vec!["a", "asdf", "a1"]);
     assert_eq!(prog.strings, vec!["hello world fn return let"]);
+  }
+
+  #[test]
+  fn compare_and_bool_exprs() {
+    let res = lex(
+      r#"
+      a<b&&c>d&&true||
+      x<=y<=z||!e
+      "#
+      .chars()
+      .collect(),
+    );
+    assert!(res.is_ok());
+    let prog = res.unwrap();
+    assert_eq!(
+      prog.tokens,
+      vec![
+        Identifier(0),
+        CmpLess,
+        Identifier(1),
+        LogicalAnd,
+        Identifier(2),
+        CmpGreater,
+        Identifier(3),
+        LogicalAnd,
+        LiteralBool(true),
+        LogicalOr,
+        Identifier(4),
+        CmpLessEquals,
+        Identifier(5),
+        CmpLessEquals,
+        Identifier(6),
+        LogicalOr,
+        LogicalNot,
+        Identifier(7)
+      ]
+    );
   }
 }

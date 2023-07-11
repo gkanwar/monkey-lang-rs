@@ -26,6 +26,8 @@ pub enum BinaryOp {
   CmpLessEquals,
   CmpGreater,
   CmpGreaterEquals,
+  LogicalAnd,
+  LogicalOr,
   Plus,
   Minus,
   Times,
@@ -33,7 +35,7 @@ pub enum BinaryOp {
 }
 #[derive(Debug, Eq, PartialEq)]
 pub enum UnaryOp {
-  Not,
+  LogicalNot,
   UPlus,
   UMinus,
 }
@@ -115,13 +117,15 @@ fn infix_binding_power(bin_op: &BinaryOp) -> (f64, f64) {
     Plus | Minus => (3.0, 3.1),
     CmpLess | CmpLessEquals | CmpGreater | CmpGreaterEquals => (2.0, 2.1),
     CmpEquals | CmpNotEquals => (1.0, 1.1),
+    LogicalAnd => (0.5, 0.6),
+    LogicalOr => (0.3, 0.4),
   }
 }
 
 fn prefix_binding_power(op: &UnaryOp) -> f64 {
   use UnaryOp::*;
   match op {
-    UPlus | UMinus | Not => 5.0,
+    UPlus | UMinus | LogicalNot => 5.0,
   }
 }
 
@@ -182,12 +186,25 @@ fn consume_expr_bp(tokens: &Vec<Token>, i: &mut usize, bp: f64) -> Result<Expr, 
       expr
     }
     // prefix
-    Token::Not => {
+    Token::LogicalNot => {
       *i += 1;
-      let op = UnaryOp::Not;
+      let op = UnaryOp::LogicalNot;
       let r_bp = prefix_binding_power(&op);
       Expr::UnaryOp(op, Box::new(consume_expr_bp(tokens, i, r_bp)?))
     }
+    Token::Minus => {
+      *i += 1;
+      let op = UnaryOp::UMinus;
+      let r_bp = prefix_binding_power(&op);
+      Expr::UnaryOp(op, Box::new(consume_expr_bp(tokens, i, r_bp)?))
+    }
+    Token::Plus => {
+      *i += 1;
+      let op = UnaryOp::UPlus;
+      let r_bp = prefix_binding_power(&op);
+      Expr::UnaryOp(op, Box::new(consume_expr_bp(tokens, i, r_bp)?))
+    }
+    // misc
     Token::Fn => {
       expect_tok!(tokens, i, Token::Fn, "fn")?;
       expect_tok!(tokens, i, Token::ParenOpen, "(")?;
@@ -199,7 +216,8 @@ fn consume_expr_bp(tokens: &Vec<Token>, i: &mut usize, bp: f64) -> Result<Expr, 
       Expr::Atom(Atomic::Func { args, body })
     }
     _ => {
-      return Err(ParseError::General("unexpected token in expression".into()));
+      return Err(ParseError::General(std::format!(
+            "unexpected token in expression: {:?}", peek)));
     }
   };
   while *i < tokens.len() {
@@ -211,11 +229,13 @@ fn consume_expr_bp(tokens: &Vec<Token>, i: &mut usize, bp: f64) -> Result<Expr, 
       Token::CmpLessEquals => Some(BinaryOp::CmpLessEquals),
       Token::CmpGreater => Some(BinaryOp::CmpGreater),
       Token::CmpGreaterEquals => Some(BinaryOp::CmpGreaterEquals),
+      Token::LogicalOr => Some(BinaryOp::LogicalOr),
+      Token::LogicalAnd => Some(BinaryOp::LogicalAnd),
       Token::Plus => Some(BinaryOp::Plus),
       Token::Minus => Some(BinaryOp::Minus),
       Token::Times => Some(BinaryOp::Times),
       Token::Divide => Some(BinaryOp::Divide),
-      _ => None
+      _ => None,
     };
     if let Some(bin_op) = maybe_bin_op {
       let (l_bp, r_bp) = infix_binding_power(&bin_op);
@@ -229,14 +249,16 @@ fn consume_expr_bp(tokens: &Vec<Token>, i: &mut usize, bp: f64) -> Result<Expr, 
     }
     let maybe_wrap_op = match op {
       Token::ParenOpen => Some((WrapOp::FnCall, Token::ParenClose)),
-      _ => None
+      _ => None,
     };
     if let Some((wrap_op, close_tok)) = maybe_wrap_op {
       *i += 1;
       let args = consume_args(tokens, i)?;
       if tokens.len() <= *i || tokens[*i] != close_tok {
         return Err(ParseError::UnexpectedToken {
-          got: tokens[*i], expected: "closing token".into() });
+          got: tokens[*i],
+          expected: "closing token".into(),
+        });
       }
       *i += 1;
       lhs = Expr::WrapOp(wrap_op, Box::new(lhs), args);
@@ -271,6 +293,7 @@ fn consume_if_else(tokens: &Vec<Token>, i: &mut usize) -> Result<Statement, Pars
     }
   };
   expect_tok!(tokens, i, Token::Else, "else")?;
+  expect_tok!(tokens, i, Token::CurlyOpen, "{")?;
   let else_body = consume_multi_statement(tokens, i)?;
   expect_tok!(tokens, i, Token::CurlyClose, "}")?;
   Ok(Statement::IfElse {
@@ -331,10 +354,10 @@ fn consume_statement(tokens: &Vec<Token>, i: &mut usize) -> Result<Option<Statem
       expect_tok!(tokens, i, Token::Semicolon, ";")?;
       stmt
     }
-    Fn | ParenOpen | ParenClose | SquareOpen | SquareClose | Not | Minus | Identifier(_) | Plus
-    | Times | Divide | CmpEquals | CmpNotEquals | CmpLess | CmpLessEquals
-    | CmpGreater | CmpGreaterEquals | Comma | Colon | LiteralString(_) | LiteralInt(_)
-    | LiteralBool(_) => {
+    Fn | ParenOpen | ParenClose | SquareOpen | SquareClose | LogicalNot | LogicalAnd
+    | LogicalOr | Minus | Identifier(_) | Plus
+    | Times | Divide | CmpEquals | CmpNotEquals | CmpLess | CmpLessEquals | CmpGreater
+    | CmpGreaterEquals | Comma | Colon | LiteralString(_) | LiteralInt(_) | LiteralBool(_) => {
       let stmt = Statement::Bare(consume_expr(tokens, i)?);
       expect_tok!(tokens, i, Token::Semicolon, ";")?;
       stmt
@@ -398,6 +421,8 @@ mod tests {
       CmpLessEquals => "<=",
       CmpGreater => ">",
       CmpGreaterEquals => ">=",
+      LogicalAnd => "&&",
+      LogicalOr => "||",
       Plus => "+",
       Minus => "-",
       Times => "*",
@@ -408,7 +433,7 @@ mod tests {
 
   fn standard_format_unop(un_op: &super::UnaryOp) -> String {
     match un_op {
-      Not => "!",
+      LogicalNot => "!",
       UPlus => "+",
       UMinus => "-",
     }
@@ -417,7 +442,7 @@ mod tests {
 
   fn standard_format_wrapop(wrap_op: &super::WrapOp) -> (String, String) {
     match wrap_op {
-      FnCall => ("(".into(), ")".into())
+      FnCall => ("(".into(), ")".into()),
     }
   }
   fn standard_format_stmts(
@@ -466,7 +491,8 @@ mod tests {
             outer.standard_format(idents, strings),
             standard_format_wrapop(wrap_op).0,
             standard_format_args(args, idents, strings),
-            standard_format_wrapop(wrap_op).1)
+            standard_format_wrapop(wrap_op).1
+          )
         }
         Atom(atomic) => match atomic {
           Var(i) => idents[*i].clone(),
@@ -549,7 +575,7 @@ mod tests {
         return a + b;
       };
       add(1,2);
-    "#
+      "#
       .chars()
       .collect(),
     );
@@ -560,5 +586,30 @@ mod tests {
       prog_fmt,
       "let add = fn(a, b) {\nreturn (+ a b);\n};\nadd(1, 2);\n"
     );
+  }
+
+  #[test]
+  fn if_else() {
+    let res = lex(
+      r#"
+      if (a < b && c > d) {
+        let x = -y;
+      }
+      if (a > b && c >= d) {
+        let x = -x;
+      }
+      else {
+        return false;
+      }
+      "#
+      .chars()
+      .collect(),
+    );
+    let res = parse(res.unwrap());
+    let prog = res.unwrap();
+    let prog_fmt = standard_format_stmts(&prog.statements, &prog.idents, &prog.strings);
+    assert_eq!(
+      prog_fmt,
+      "if ((&& (< a b) (> c d))) {\nlet x = (- y);\n}\nif ((&& (> a b) (>= c d))) {\nlet x = (- x);\n}\nelse {\nreturn false;\n}\n");
   }
 }
