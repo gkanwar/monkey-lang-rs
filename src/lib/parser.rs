@@ -49,6 +49,7 @@ pub enum Atomic {
   LiteralString(StringIdx),
   LiteralInt(i64),
   LiteralBool(bool),
+  LiteralList(Vec<Expr>),
   Func {
     args: Vec<Expr>,
     body: Vec<Statement>,
@@ -136,11 +137,12 @@ fn consume_args(tokens: &Vec<Token>, i: &mut usize) -> Result<Vec<Expr>, ParseEr
     if tokens.len() <= *i {
       return Err(ParseError::EarlyEof("expected fn args".into()));
     }
+    use Token::*;
     match tokens[*i] {
-      Token::Comma => {
+      Comma => {
         *i += 1;
       }
-      Token::ParenClose => {
+      ParenClose | SquareClose | CurlyClose => {
         break;
       }
       _ => {
@@ -184,6 +186,12 @@ fn consume_expr_bp(tokens: &Vec<Token>, i: &mut usize, bp: f64) -> Result<Expr, 
       let expr = consume_expr(tokens, i)?;
       expect_tok!(tokens, i, Token::ParenClose, ")")?;
       expr
+    }
+    Token::SquareOpen => {
+      expect_tok!(tokens, i, Token::SquareOpen, "[")?;
+      let elts = consume_args(tokens, i)?;
+      expect_tok!(tokens, i, Token::SquareClose, "]")?;
+      Expr::Atom(Atomic::LiteralList(elts))
     }
     // prefix
     Token::LogicalNot => {
@@ -499,6 +507,8 @@ mod tests {
           LiteralString(i) => std::format!("\"{}\"", strings[*i]),
           LiteralInt(n) => std::format!("{}", n),
           LiteralBool(b) => std::format!("{}", b),
+          LiteralList(elts) => std::format!(
+            "[{}]", standard_format_args(elts, idents, strings)),
           Func { args, body } => std::format!(
             "fn({}) {{\n{}}}",
             standard_format_args(args, idents, strings),
@@ -611,5 +621,15 @@ mod tests {
     assert_eq!(
       prog_fmt,
       "if ((&& (< a b) (> c d))) {\nlet x = (- y);\n}\nif ((&& (> a b) (>= c d))) {\nlet x = (- x);\n}\nelse {\nreturn false;\n}\n");
+  }
+
+  #[test]
+  fn make_list() {
+    let res = lex("let a = [1, 3+4, 5*6];".chars().collect());
+    let res = parse(res.unwrap());
+    let prog = res.unwrap();
+    let prog_fmt = standard_format_stmts(&prog.statements, &prog.idents, &prog.strings);
+    assert_eq!(
+      prog_fmt, "let a = [1, (+ 3 4), (* 5 6)];\n");
   }
 }
