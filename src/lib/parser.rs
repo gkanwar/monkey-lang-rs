@@ -51,7 +51,7 @@ pub enum Atomic {
   LiteralBool(bool),
   LiteralList(Vec<Expr>),
   Func {
-    args: Vec<Expr>,
+    args: Vec<usize>,
     body: Vec<Statement>,
   },
 }
@@ -83,9 +83,9 @@ pub enum ParseError {
 }
 
 pub struct Program {
-  statements: Vec<Statement>,
-  idents: Vec<String>,
-  strings: Vec<String>,
+  pub statements: Vec<Statement>,
+  pub idents: Vec<String>,
+  pub strings: Vec<String>,
 }
 
 macro_rules! expect_tok {
@@ -130,12 +130,41 @@ fn prefix_binding_power(op: &UnaryOp) -> f64 {
   }
 }
 
+fn consume_arg_names(tokens: &Vec<Token>, i: &mut usize) -> Result<Vec<usize>, ParseError> {
+  let mut args: Vec<usize> = vec![];
+  use Token::*;
+  while *i < tokens.len() {
+    if let Token::Identifier(ident) = tokens[*i] {
+      args.push(ident);
+    }
+    expect_tok!(tokens, i, Token::Identifier(_), "identifier")?;
+    if tokens.len() <= *i {
+      return Err(ParseError::EarlyEof("expected fn arg names".into()));
+    }
+    match tokens[*i] {
+      Comma => {
+        *i += 1;
+      }
+      ParenClose => {
+        break;
+      }
+      _ => {
+        return Err(ParseError::UnexpectedToken {
+          got: tokens[*i],
+          expected: "continuation of arg names or close paren".into(),
+        });
+      }
+    }
+  }
+  Ok(args)
+}
+
 fn consume_args(tokens: &Vec<Token>, i: &mut usize) -> Result<Vec<Expr>, ParseError> {
   let mut args: Vec<Expr> = vec![];
   while *i < tokens.len() {
     args.push(consume_expr(tokens, i)?);
     if tokens.len() <= *i {
-      return Err(ParseError::EarlyEof("expected fn args".into()));
+      return Err(ParseError::EarlyEof("expected comma-separated expr list".into()));
     }
     use Token::*;
     match tokens[*i] {
@@ -148,7 +177,7 @@ fn consume_args(tokens: &Vec<Token>, i: &mut usize) -> Result<Vec<Expr>, ParseEr
       _ => {
         return Err(ParseError::UnexpectedToken {
           got: tokens[*i],
-          expected: "continuation of args or close paren".into(),
+          expected: "continuation of expr list or close paren".into(),
         });
       }
     };
@@ -216,7 +245,7 @@ fn consume_expr_bp(tokens: &Vec<Token>, i: &mut usize, bp: f64) -> Result<Expr, 
     Token::Fn => {
       expect_tok!(tokens, i, Token::Fn, "fn")?;
       expect_tok!(tokens, i, Token::ParenOpen, "(")?;
-      let args = consume_args(tokens, i)?;
+      let args = consume_arg_names(tokens, i)?;
       expect_tok!(tokens, i, Token::ParenClose, ")")?;
       expect_tok!(tokens, i, Token::CurlyOpen, "{")?;
       let body = consume_multi_statement(tokens, i)?;
@@ -475,6 +504,17 @@ mod tests {
     out
   }
 
+  fn standard_format_arg_names(arg_names: &Vec<usize>, idents: &Vec<String>, strings: &Vec<String>) -> String {
+    let mut out = String::new();
+    for i in 0..arg_names.len() {
+      if i != 0 {
+        out.push_str(", ");
+      }
+      out.push_str(&idents[arg_names[i]]);
+    }
+    out
+  }
+
   impl StandardFmt for Expr {
     fn standard_format(&self, idents: &Vec<String>, strings: &Vec<String>) -> String {
       match self {
@@ -511,7 +551,7 @@ mod tests {
             "[{}]", standard_format_args(elts, idents, strings)),
           Func { args, body } => std::format!(
             "fn({}) {{\n{}}}",
-            standard_format_args(args, idents, strings),
+            standard_format_arg_names(args, idents, strings),
             standard_format_stmts(body, idents, strings)
           ),
         },
