@@ -43,16 +43,108 @@ pub enum RuntimeError {
   TypeError(String)
 }
 
+fn expect_bool_value(value: &Value) -> Result<bool, RuntimeError> {
+  if let Value::Bool(b) = value {
+    Ok(b)
+  }
+  else {
+    Err(RuntimeError::TypeError(std::format!(
+          "expected bool, received {}", value)))
+  }
+}
+
+// TODO: Other number types like float?
+fn expect_number_value(value: &Value) -> Result<i64, RuntimeError> {
+  if let Value::Int(i) = value {
+    Ok(i)
+  }
+  else {
+    Err(RuntimeError::TypeError(std::format!(
+          "expected int, received {}", value)))
+  }
+}
+
 fn eval_expression(expr: &parser::Expr, state: &mut State,
                    idents: &Vec<String>, strings: &Vec<String>)
   -> Result<Value, RuntimeError> {
   use parser::Expr::*;
-  match expr {
+  let value = match expr {
     BinaryOp(bin_op, left, right) => {
-      let expr_l = eval_expression(left, state, idents, strings)?;
-      let expr_r = eval_expression(right, state, idents, strings)?;
+      let value_l = eval_expression(left, state, idents, strings)?;
+      let value_r = eval_expression(right, state, idents, strings)?;
       match bin_op {
-        _ => { todo!(); }
+        LogicalAnd => {
+          let bool_l = expect_bool_value(&value_l)?;
+          let bool_r = expect_bool_value(&value_r)?;
+          Value::Bool(bool_l && bool_r)
+        }
+        LogicalOr => {
+          let bool_l = expect_bool_value(&value_l)?;
+          let bool_r = expect_bool_value(&value_r)?;
+          Value::Bool(bool_l || bool_r)
+        }
+        CmpEquals => {
+          match value_l {
+            Int(i) => Value::Bool(i == expect_number_value(&value_r)?),
+            Bool(b) => Value::Bool(b == expect_number_value(&value_r)?),
+            Str(s) => Value::Bool(s == expect_string_value(&value_r)?),
+            _ => {
+              return Err(RuntimeError::TypeError(
+                std::format!("value {} does not support equality check", value_l)));
+            }
+          }
+        }
+        CmpNotEquals => {
+          match value_l {
+            Int(i) => Value::Bool(i != expect_number_value(&value_r)?),
+            Bool(b) => Value::Bool(b != expect_number_value(&value_r)?),
+            Str(s) => Value::Bool(s != expect_string_value(&value_r)?),
+            _ => {
+              return Err(RuntimeError::TypeError(
+                std::format!("value {} does not support equality check", value_l)));
+            }
+          }
+        }
+        CmpLess => {
+          let num_l = expect_number_value(&value_l)?;
+          let num_r = expect_number_value(&value_r)?;
+          Value::Bool(num_l < num_r)
+        }
+        CmpLessEquals => {
+          let num_l = expect_number_value(&value_l)?;
+          let num_r = expect_number_value(&value_r)?;
+          Value::Bool(num_l <= num_r)
+        }
+        CmpGreater => {
+          let num_l = expect_number_value(&value_l)?;
+          let num_r = expect_number_value(&value_r)?;
+          Value::Bool(num_l > num_r)
+        }
+        CmpGreaterEquals => {
+          let num_l = expect_number_value(&value_l)?;
+          let num_r = expect_number_value(&value_r)?;
+          Value::Bool(num_l >= num_r)
+        }
+        Plus => {
+          let num_l = expect_number_value(&value_l)?;
+          let num_r = expect_number_value(&value_r)?;
+          Value::Int(num_l + num_r)
+        }
+        Minus => {
+          let num_l = expect_number_value(&value_l)?;
+          let num_r = expect_number_value(&value_r)?;
+          Value::Int(num_l - num_r)
+        }
+        Times => {
+          let num_l = expect_number_value(&value_l)?;
+          let num_r = expect_number_value(&value_r)?;
+          Value::Int(num_l * num_r)
+        }
+        Divide => {
+          let num_l = expect_number_value(&value_l)?;
+          let num_r = expect_number_value(&value_r)?;
+          Value::Int(num_l / num_r)
+        }
       }
     }
     UnaryOp(un_op, value) => {
@@ -64,7 +156,8 @@ fn eval_expression(expr: &parser::Expr, state: &mut State,
     Atom(atomic) => match atomic {
       _ => { todo!(); }
     }
-  }
+  };
+  Ok(value)
 }
 
 fn eval_statement(
