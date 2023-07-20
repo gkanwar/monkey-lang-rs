@@ -1,8 +1,8 @@
-use std::rc::Rc;
 use crate::parser;
+use std::rc::Rc;
 
-#[derive(Debug)]
-enum Value {
+#[derive(Debug,PartialEq,Eq)]
+pub enum Value {
   Int(i64),
   Bool(bool),
   Str(String),
@@ -10,7 +10,7 @@ enum Value {
   Func {
     args: Vec<parser::Expr>,
     body: Vec<parser::Statement>,
-  }
+  },
 }
 
 struct Binding {
@@ -39,37 +39,53 @@ impl State {
   }
 }
 
+#[derive(Debug)]
 pub enum RuntimeError {
-  TypeError(String)
+  TypeError(String),
 }
 
 fn expect_bool_value(value: &Value) -> Result<bool, RuntimeError> {
   if let Value::Bool(b) = value {
-    Ok(b)
+    Ok(*b)
   }
   else {
     Err(RuntimeError::TypeError(std::format!(
-          "expected bool, received {}", value)))
+          "expected bool, received {:?}", value)))
   }
 }
 
 // TODO: Other number types like float?
 fn expect_number_value(value: &Value) -> Result<i64, RuntimeError> {
   if let Value::Int(i) = value {
-    Ok(i)
+    Ok(*i)
   }
   else {
     Err(RuntimeError::TypeError(std::format!(
-          "expected int, received {}", value)))
+          "expected int, received {:?}", value)))
   }
 }
 
-fn eval_expression(expr: &parser::Expr, state: &mut State,
-                   idents: &Vec<String>, strings: &Vec<String>)
-  -> Result<Value, RuntimeError> {
-  use parser::Expr::*;
+fn expect_string_value(value: &Value) -> Result<String, RuntimeError> {
+  if let Value::Str(s) = value {
+    Ok(s.clone()) // TODO
+  }
+  else {
+    Err(RuntimeError::TypeError(std::format!(
+          "expected string, received {:?}", value)))
+  }
+}
+
+fn eval_expression(
+  expr: &parser::Expr,
+  state: &mut State,
+  idents: &Vec<String>,
+  strings: &Vec<String>,
+) -> Result<Value, RuntimeError> {
+  use parser::Expr;
+  use parser::Atomic::*;
+  use parser::BinaryOp::*;
   let value = match expr {
-    BinaryOp(bin_op, left, right) => {
+    Expr::BinaryOp(bin_op, left, right) => {
       let value_l = eval_expression(left, state, idents, strings)?;
       let value_r = eval_expression(right, state, idents, strings)?;
       match bin_op {
@@ -85,23 +101,23 @@ fn eval_expression(expr: &parser::Expr, state: &mut State,
         }
         CmpEquals => {
           match value_l {
-            Int(i) => Value::Bool(i == expect_number_value(&value_r)?),
-            Bool(b) => Value::Bool(b == expect_number_value(&value_r)?),
-            Str(s) => Value::Bool(s == expect_string_value(&value_r)?),
+            Value::Int(i) => Value::Bool(i == expect_number_value(&value_r)?),
+            Value::Bool(b) => Value::Bool(b == expect_bool_value(&value_r)?),
+            Value::Str(s) => Value::Bool(s == expect_string_value(&value_r)?),
             _ => {
               return Err(RuntimeError::TypeError(
-                std::format!("value {} does not support equality check", value_l)));
+                std::format!("value {:?} does not support equality check", value_l)));
             }
           }
         }
         CmpNotEquals => {
           match value_l {
-            Int(i) => Value::Bool(i != expect_number_value(&value_r)?),
-            Bool(b) => Value::Bool(b != expect_number_value(&value_r)?),
-            Str(s) => Value::Bool(s != expect_string_value(&value_r)?),
+            Value::Int(i) => Value::Bool(i != expect_number_value(&value_r)?),
+            Value::Bool(b) => Value::Bool(b != expect_bool_value(&value_r)?),
+            Value::Str(s) => Value::Bool(s != expect_string_value(&value_r)?),
             _ => {
               return Err(RuntimeError::TypeError(
-                std::format!("value {} does not support equality check", value_l)));
+                std::format!("value {:?} does not support equality check", value_l)));
             }
           }
         }
@@ -147,47 +163,54 @@ fn eval_expression(expr: &parser::Expr, state: &mut State,
         }
       }
     }
-    UnaryOp(un_op, value) => {
+    Expr::UnaryOp(un_op, value) => {
       todo!();
     }
-    WrapOp(wrap_op, outer, inner) => {
+    Expr::WrapOp(wrap_op, outer, inner) => {
       todo!();
     }
-    Atom(atomic) => match atomic {
-      _ => { todo!(); }
-    }
+    Expr::Atom(atomic) => match atomic {
+      LiteralInt(i) => Value::Int(*i),
+      _ => {
+        todo!();
+      }
+    },
   };
   Ok(value)
 }
 
 fn eval_statement(
-  stmt: &parser::Statement, state: &mut State,
-  idents: &Vec<String>, strings: &Vec<String>)
-  -> Result<(), RuntimeError> {
+  stmt: &parser::Statement,
+  state: &mut State,
+  idents: &Vec<String>,
+  strings: &Vec<String>,
+) -> Result<Option<Value>, RuntimeError> {
   use parser::Statement::*;
-  match stmt {
+  let value: Option<Value> = match stmt {
     Assign { left, right } => {
       let value = eval_expression(right, state, idents, strings)?;
-      todo!();
+      todo!(); // TODO do binding
+      // Some(value)
     }
     IfElse { pred, yes, no } => {
       let pred_value = eval_expression(pred, state, idents, strings)?;
       match pred_value {
         Value::Bool(b) => {
           state.push_scope();
-          if b {
-            eval_statements(yes, state, idents, strings)?;
-          }
-          else {
+          let value = if b {
+            eval_statements(yes, state, idents, strings)?
+          } else {
             if let Some(no_stmts) = no {
-              eval_statements(no_stmts, state, idents, strings)?;
+              eval_statements(no_stmts, state, idents, strings)?
             }
-          }
+            else {
+              None
+            }
+          };
           state.pop_scope();
+          value
         }
-        _ => {
-          return Err(RuntimeError::TypeError("if predicate expected bool".into()))
-        }
+        _ => return Err(RuntimeError::TypeError("if predicate expected bool".into())),
       }
     }
     Return(expr) => {
@@ -195,29 +218,47 @@ fn eval_statement(
     }
     Block(stmts) => {
       state.push_scope();
-      eval_statements(stmts, state, idents, strings)?;
+      let value = eval_statements(stmts, state, idents, strings)?;
       state.pop_scope();
+      value
     }
     Bare(expr) => {
-      todo!();
+      Some(eval_expression(expr, state, idents, strings)?)
     }
   };
-  Ok(())
+  Ok(value)
 }
 
 fn eval_statements(
-  stmts: &Vec<parser::Statement>, state: &mut State,
-  idents: &Vec<String>, strings: &Vec<String>)
-  -> Result<(), RuntimeError> {
+  stmts: &Vec<parser::Statement>,
+  state: &mut State,
+  idents: &Vec<String>,
+  strings: &Vec<String>,
+) -> Result<Option<Value>, RuntimeError> {
+  let mut value = None;
   for stmt in stmts.iter() {
-    eval_statement(stmt, state, idents, strings)?;
+    value = eval_statement(stmt, state, idents, strings)?;
   }
-  Ok(())
+  Ok(value)
 }
 
-pub fn interpret(prog: parser::Program) -> Result<(), RuntimeError> {
+pub fn interpret(prog: parser::Program) -> Result<Option<Value>, RuntimeError> {
   let mut state = State::new();
-  eval_statements(
-    &prog.statements, &mut state, &prog.idents, &prog.strings)?;
-  Ok(())
+  eval_statements(&prog.statements, &mut state, &prog.idents, &prog.strings)
+}
+
+mod tests {
+  use super::*;
+  use crate::lexer::lex;
+  use crate::parser::parse;
+
+  #[test]
+  pub fn simple_add() {
+    let prog = lex("1+2;".chars().collect()).unwrap();
+    let prog = parse(prog).unwrap();
+    let out: Option<Value> = interpret(prog).unwrap();
+    assert!(out.is_some());
+    let val = out.unwrap();
+    assert_eq!(val, Value::Int(3));
+  }
 }
