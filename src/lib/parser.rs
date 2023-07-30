@@ -1,7 +1,7 @@
 use crate::lexer;
 use crate::lexer::{IdentIdx, StringIdx, Token};
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum CmpType {
   Less,
   LessEquals,
@@ -11,14 +11,14 @@ pub enum CmpType {
   NotEquals,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Expr {
   BinaryOp(BinaryOp, Box<Expr>, Box<Expr>),
   UnaryOp(UnaryOp, Box<Expr>),
   WrapOp(WrapOp, Box<Expr>, Vec<Expr>),
   Atom(Atomic),
 }
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BinaryOp {
   CmpEquals,
   CmpNotEquals,
@@ -33,17 +33,17 @@ pub enum BinaryOp {
   Times,
   Divide,
 }
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum UnaryOp {
   LogicalNot,
   UPlus,
   UMinus,
 }
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum WrapOp {
   FnCall,
 }
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Atomic {
   Var(IdentIdx),
   LiteralString(StringIdx),
@@ -56,7 +56,7 @@ pub enum Atomic {
   },
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Statement {
   Assign {
     left: IdentIdx,

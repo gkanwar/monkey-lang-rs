@@ -1,7 +1,8 @@
 use crate::parser;
-use std::rc::Rc;
+use std::{rc::Rc, collections::HashMap, collections::hash_map::Entry};
 
-#[derive(Debug,PartialEq,Eq)]
+
+#[derive(Clone,Debug,PartialEq,Eq)]
 pub enum Value {
   Int(i64),
   Bool(bool),
@@ -13,14 +14,33 @@ pub enum Value {
   },
 }
 
-struct Binding {
-  ident: usize,
-  value: Value,
-}
+// struct Binding {
+//   ident: usize,
+//   value: Value,
+// }
 
 struct Scope {
   // TODO: need to do var name transform some time...
-  bindings: Vec<Rc<Binding>>,
+  bindings: HashMap<usize, Rc<Value>>,
+}
+impl Scope {
+  fn bind(&mut self, ident: usize, value: Value) {
+    println!("Bind {} {:?}", ident, value);
+    match self.bindings.entry(ident) {
+      Entry::Occupied(mut entry) => {
+        entry.insert(Rc::new(value));
+      }
+      Entry::Vacant(entry) => {
+        entry.insert(Rc::new(value));
+      }
+    }
+    println!("bindings {:?}", self.bindings);
+  }
+  // gives a clone of the contained value if it exists
+  fn lookup(&self, ident: usize) -> Option<Value> {
+    println!("Lookup bindings {:?} ident {}", self.bindings, ident);
+    self.bindings.get(&ident).map(|v| (**v).clone())
+  }
 }
 
 struct State {
@@ -32,16 +52,25 @@ impl State {
     Self { scopes: vec![] }
   }
   fn push_scope(&mut self) {
-    self.scopes.push(Scope { bindings: vec![] });
+    self.scopes.push(Scope { bindings: HashMap::new() });
   }
   fn pop_scope(&mut self) {
     self.scopes.pop();
+  }
+  fn lookup(&self, ident: usize) -> Option<Value> {
+    for scope in self.scopes.iter().rev() {
+      if let Some(v) = scope.lookup(ident) {
+        return Some(v);
+      }
+    }
+    None
   }
 }
 
 #[derive(Debug)]
 pub enum RuntimeError {
   TypeError(String),
+  NameError(String),
 }
 
 fn expect_bool_value(value: &Value) -> Result<bool, RuntimeError> {
@@ -171,6 +200,12 @@ fn eval_expression(
     }
     Expr::Atom(atomic) => match atomic {
       LiteralInt(i) => Value::Int(*i),
+      Var(ident) => match state.lookup(*ident) {
+        Some(v) => v,
+        None => {
+          return Err(RuntimeError::NameError(idents[*ident].clone()));
+        }
+      }
       _ => {
         todo!();
       }
@@ -189,8 +224,9 @@ fn eval_statement(
   let value: Option<Value> = match stmt {
     Assign { left, right } => {
       let value = eval_expression(right, state, idents, strings)?;
-      todo!(); // TODO do binding
-      // Some(value)
+      let scope = state.scopes.last_mut().unwrap();
+      scope.bind(*left, value.clone());
+      Some(value)
     }
     IfElse { pred, yes, no } => {
       let pred_value = eval_expression(pred, state, idents, strings)?;
@@ -244,7 +280,11 @@ fn eval_statements(
 
 pub fn interpret(prog: parser::Program) -> Result<Option<Value>, RuntimeError> {
   let mut state = State::new();
-  eval_statements(&prog.statements, &mut state, &prog.idents, &prog.strings)
+  state.push_scope(); // global scope
+  let out = eval_statements(
+    &prog.statements, &mut state, &prog.idents, &prog.strings);
+  state.pop_scope();
+  out
 }
 
 mod tests {
@@ -260,5 +300,14 @@ mod tests {
     assert!(out.is_some());
     let val = out.unwrap();
     assert_eq!(val, Value::Int(3));
+  }
+  #[test]
+  pub fn simple_let() {
+    let prog = lex("let a = 42; a;".chars().collect()).unwrap();
+    let prog = parse(prog).unwrap();
+    let out: Option<Value> = interpret(prog).unwrap();
+    assert!(out.is_some());
+    let val = out.unwrap();
+    assert_eq!(val, Value::Int(42));
   }
 }
